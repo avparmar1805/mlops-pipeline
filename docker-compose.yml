@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    container_name: mlflow-server
+    volumes:
+      - mlflow-artifacts:/mlruns
+      - mlflow-db:/mlflow.db             # named volume for sqlite file
+    ports:
+      - "5000:5000"
+
+  api:
+    image: parmarav/calihousing-api:latest
+    container_name: calihousing-api
+    depends_on:
+      - mlflow
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    ports:
+      - "8080:8080"
+
+volumes:
+  mlflow-artifacts: {}
+  mlflow-db: {}
