@@ -1,5 +1,4 @@
 version: "3.8"
-
 services:
   mlflow:
     build:
@@ -8,7 +7,6 @@ services:
     container_name: mlflow-server
     volumes:
       - mlflow-artifacts:/mlruns
-      - mlflow-db:/mlflow.db             # named volume for sqlite file
     ports:
       - "5000:5000"
 
@@ -24,4 +22,3 @@ services:
 
 volumes:
   mlflow-artifacts: {}
-  mlflow-db: {}
