@@ -68,6 +68,6 @@ def predict(features: HousingFeatures):
         logging.exception("Prediction failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
+@app.get("/health")
 def root():
     return {"message": "Send POST to /predict with housing features."}
