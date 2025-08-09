@@ -23,7 +23,7 @@ RUN pip3 install --no-cache-dir --no-index \
       --find-links /wheels -r requirements.txt
 
 COPY src/ ./src/
-COPY logs/ ./logs/
+RUN mkdir -p ./logs
 
 EXPOSE 8080
 CMD ["uvicorn", "src.app:app", "--host", "0.0.0.0", "--port", "8080"]
