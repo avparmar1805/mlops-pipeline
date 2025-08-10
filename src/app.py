@@ -1,13 +1,24 @@
 import os
+import time
 import logging
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field, validator
 
 import mlflow
 import mlflow.sklearn
 from mlflow.tracking import MlflowClient
+
+# Prometheus
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+
+# -------------------------
+# NOTE: If you run multiple worker processes (Gunicorn uvicorn workers),
+# you must use prometheus_client's multiprocess mode and expose metrics differently.
+# This file uses single-process mode which works for simple deployments.
+# -------------------------
 
 # -------------------------
 # Configure logging
@@ -17,10 +28,47 @@ def setup_logging():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[
-            logging.FileHandler("app.log"),      # Log to file
-            logging.StreamHandler()              # Also log to console
+            logging.FileHandler("app.log"),
+            logging.StreamHandler()
         ]
     )
+
+# -------------------------
+# Prometheus metrics
+# -------------------------
+PREDICTION_COUNTER = Counter(
+    "prediction_requests_total",
+    "Total number of prediction requests",
+    ["model_version", "method"]
+)
+PREDICTION_FAILURES = Counter(
+    "prediction_failures_total",
+    "Total number of failed prediction requests",
+    ["model_version"]
+)
+PREDICTION_LATENCY = Histogram(
+    "prediction_latency_seconds",
+    "Prediction latency in seconds",
+    ["model_version"]
+)
+MODEL_LOADED = Gauge(
+    "model_loaded_info",
+    "Info about currently loaded model (label useful for queries)",
+    ["model_version"]
+)
+IN_PROGRESS = Gauge("in_progress_requests", "In-progress request count")
+REQUEST_COUNT = Counter("api_requests_total", "Total API Requests", ["endpoint"])
+REQUEST_LATENCY = Histogram("api_request_latency_seconds", "Latency of API requests", ["endpoint"])
+
+
+# Helper to compute model_version label from CURRENT_MODEL_URI
+def model_version_label() -> str:
+    uri = globals().get("CURRENT_MODEL_URI", "")
+    if not uri:
+        return "unknown"
+    # prefer the last meaningful segment (e.g. models:/Name/3 -> '3', runs:/<run_id>/model -> '<run_id>')
+    parts = [p for p in uri.split("/") if p]
+    return parts[-1] if parts else "unknown"
 
 # -------------------------
 # Load MLflow model helper
@@ -35,6 +83,7 @@ def load_model_from_registry(
     """
     Loads model either from a specific run (runs:/) if run_id provided,
     otherwise loads the latest version in the specified registry stage (models:/).
+    Returns (model, model_uri).
     """
     if mlflow_tracking_uri:
         mlflow.set_tracking_uri(mlflow_tracking_uri)
@@ -96,6 +145,9 @@ MODEL_RUN_ID = os.getenv("MODEL_RUN_ID", None)           # set this to switch to
 MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", None)
 ARTIFACT_PATH = os.getenv("MODEL_ARTIFACT_PATH", "model")  # artifact path used when logging model
 
+# ensure the global CURRENT_MODEL_URI exists before model load (middleware can reference)
+CURRENT_MODEL_URI = ""
+
 # Load the model once at startup (Option A: change env and restart to switch)
 try:
     model, CURRENT_MODEL_URI = load_model_from_registry(
@@ -105,10 +157,50 @@ try:
         mlflow_tracking_uri=MLFLOW_TRACKING_URI,
         artifact_path=ARTIFACT_PATH,
     )
+    # set model_loaded gauge (label value -> 1)
+    MODEL_LOADED.labels(model_version=model_version_label()).set(1)
 except Exception as e:
     logging.exception("Model loading failed at startup.")
-    # Optionally exit if you want the container to fail fast
+    # Fail fast so deployment shows error
     raise
+
+# -------------------------
+# Prometheus middleware
+# -------------------------
+@app.middleware("http")
+async def prometheus_middleware(request: Request, call_next):
+    path = request.url.path
+    start = time.time()
+    IN_PROGRESS.inc()
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        # Count failures for prediction endpoint
+        if path.startswith("/predict"):
+            try:
+                PREDICTION_FAILURES.labels(model_version=model_version_label()).inc()
+            except Exception:
+                logging.exception("Failed incrementing failure counter")
+        raise
+    finally:
+        elapsed = time.time() - start
+        IN_PROGRESS.dec()
+        if path.startswith("/predict"):
+            try:
+                PREDICTION_COUNTER.labels(model_version=model_version_label(), method=request.method).inc()
+                PREDICTION_LATENCY.labels(model_version=model_version_label()).observe(elapsed)
+                process_time = time.time() - start
+                REQUEST_COUNT.labels(endpoint=request.url.path).inc()
+                REQUEST_LATENCY.labels(endpoint=request.url.path).observe(process_time)
+            except Exception:
+                logging.exception("Failed updating metrics")
+
+# Expose metrics for Prometheus to scrape
+@app.get("/metrics")
+def metrics():
+    data = generate_latest()
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
 # -------------------------
 # Endpoints
@@ -123,6 +215,11 @@ def predict(features: HousingFeatures):
         return PredictionResponse(predicted_value=float(pred))
     except Exception as e:
         logging.exception("Prediction failed")
+        # increment failure counter explicitly (in addition to middleware)
+        try:
+            PREDICTION_FAILURES.labels(model_version=model_version_label()).inc()
+        except Exception:
+            logging.exception("Failed incrementing failure counter in handler")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

@@ -1,0 +1,84 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "gnetId": null,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": null,
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "options": {},
+      "targets": [
+        {
+          "expr": "rate(prediction_requests_total[1m])",
+          "legendFormat": "{{model_version}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Prediction Rate (req/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": null,
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "options": {},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(prediction_latency_seconds_bucket[5m])) by (le, model_version))",
+          "legendFormat": "{{model_version}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Prediction Latency P95 (s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": null,
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 6 },
+      "id": 3,
+      "options": {},
+      "targets": [
+        {
+          "expr": "100 * (sum(rate(prediction_failures_total[5m])) by (model_version)) / (sum(rate(prediction_requests_total[5m])) by (model_version))",
+          "legendFormat": "{{model_version}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Error Rate (%)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": null,
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 6 },
+      "id": 4,
+      "options": { "legend": { "displayMode": "list" } },
+      "targets": [
+        {
+          "expr": "sum by (model_version) (rate(prediction_requests_total[5m]))",
+          "legendFormat": "{{model_version}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Requests by Model Version",
+      "type": "timeseries"
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["calihousing-api","prometheus"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "ML API Metrics",
+  "uid": null,
+  "version": 1
+}
